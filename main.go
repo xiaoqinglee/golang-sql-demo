@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -395,20 +396,23 @@ type ISqlxDBOrSqlxTx interface {
 // 如果事务是当前方法创建的, 那么离开当前方法时会根据情况决定提交或回滚次事务.
 // TxRequired 的调用和 conditionallyCommitFunc 的调用应该应该在一个函数中成对.
 
-func TxRequired(inputHandle ISqlxDBOrSqlxTx) (outputHandle ISqlxDBOrSqlxTx, conditionallyCommitFunc func(errorWhenLeaveTxScope error) (originalErrorOrCommitError error), err error) {
+func TxRequired(inputHandle ISqlxDBOrSqlxTx) (outputHandle ISqlxDBOrSqlxTx, conditionallyCommitFunc func(originalErrorWhenLeaveTxScope error) (finalError error), err error) {
 	switch inputHandle := inputHandle.(type) {
 	case *sqlx.Tx:
-		noOp := func(errorWhenLeaveTxScope error) (originalError error) { return errorWhenLeaveTxScope }
+		noOp := func(originalErrorWhenLeaveTxScope error) (finalError error) { return originalErrorWhenLeaveTxScope }
 		return inputHandle, noOp, nil
 	case *sqlx.DB:
 		sqlxTx, err := inputHandle.Beginx()
 		if err != nil {
 			return nil, nil, err
 		}
-		commitOrRollback := func(errorWhenLeaveTxScope error) (originalErrorOrCommitError error) {
-			if errorWhenLeaveTxScope != nil {
-				_ = sqlxTx.Rollback()
-				return errorWhenLeaveTxScope
+		commitOrRollback := func(originalErrorWhenLeaveTxScope error) (finalError error) {
+			if originalErrorWhenLeaveTxScope != nil {
+				rollbackError := sqlxTx.Rollback()
+				if rollbackError != nil {
+					return errors.Join(originalErrorWhenLeaveTxScope, rollbackError)
+				}
+				return originalErrorWhenLeaveTxScope
 			}
 			commitError := sqlxTx.Commit()
 			return commitError
