@@ -18,6 +18,8 @@ https://pkg.go.dev/github.com/jmoiron/sqlx
 
 http://jmoiron.github.io/sqlx/
 
+http://jmoiron.github.io/sqlx/#connectionPool
+
 
 squirrel:
 

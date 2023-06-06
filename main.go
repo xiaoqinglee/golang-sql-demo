@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -279,7 +280,7 @@ func testUnsafeVersionDB() {
 type ReportV2 struct {
 	ReportId       int64       `db:"report_id"`
 	Reporter       int64       `db:"reporter"`
-	ReportContent  null.String `db:"report_content"`
+	ReportContent  null.String `db:"report_content"` // 区分 null 和 zero value
 	ReportedAt     time.Time   `db:"reported_at"`
 	UnmappedInDest int64
 }
@@ -287,7 +288,7 @@ type ReportV2 struct {
 type ReportV3 struct {
 	ReportId       int64       `db:"report_id"`
 	Reporter       int64       `db:"reporter"`
-	ReportContent  zero.String `db:"report_content"`
+	ReportContent  zero.String `db:"report_content"` // 不区分 null 和 zero value
 	ReportedAt     time.Time   `db:"reported_at"`
 	UnmappedInDest int64
 }
@@ -323,9 +324,202 @@ func testMarshallAndUnmarshallNullableFields() {
 	reportV3 = &ReportV3{}
 	err = json.Unmarshal(bytes_, reportV3)
 	pp.Println(reportV3, err)
-
 }
 
 func main() {
-	testInClauseAndNamedQuery()
+	testTxnPropagation()
+}
+
+type ISqlxConn interface {
+	BeginTxx(ctx context.Context, opts *sql.TxOptions) (*sqlx.Tx, error)
+	GetContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error
+	PreparexContext(ctx context.Context, query string) (*sqlx.Stmt, error)
+	QueryRowxContext(ctx context.Context, query string, args ...interface{}) *sqlx.Row
+	QueryxContext(ctx context.Context, query string, args ...interface{}) (*sqlx.Rows, error)
+	Rebind(query string) string
+	SelectContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error
+}
+
+type ISqlxTx interface {
+	ISqlxDBOrSqlxTx
+	NamedStmt(stmt *sqlx.NamedStmt) *sqlx.NamedStmt
+	NamedStmtContext(ctx context.Context, stmt *sqlx.NamedStmt) *sqlx.NamedStmt
+	Stmtx(stmt interface{}) *sqlx.Stmt
+	StmtxContext(ctx context.Context, stmt interface{}) *sqlx.Stmt
+	Unsafe() *sqlx.Tx
+}
+
+type ISqlxDB interface {
+	ISqlxDBOrSqlxTx
+	BeginTxx(ctx context.Context, opts *sql.TxOptions) (*sqlx.Tx, error)
+	Beginx() (*sqlx.Tx, error)
+	Connx(ctx context.Context) (*sqlx.Conn, error)
+	MapperFunc(mf func(string) string)
+	MustBegin() *sqlx.Tx
+	MustBeginTx(ctx context.Context, opts *sql.TxOptions) *sqlx.Tx
+	NamedQueryContext(ctx context.Context, query string, arg interface{}) (*sqlx.Rows, error)
+	Unsafe() *sqlx.DB
+}
+
+type ISqlxDBOrSqlxTx interface {
+	BindNamed(query string, arg interface{}) (string, []interface{}, error)
+	DriverName() string
+	Get(dest interface{}, query string, args ...interface{}) error
+	GetContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error
+	MustExec(query string, args ...interface{}) sql.Result
+	MustExecContext(ctx context.Context, query string, args ...interface{}) sql.Result
+	NamedExec(query string, arg interface{}) (sql.Result, error)
+	NamedExecContext(ctx context.Context, query string, arg interface{}) (sql.Result, error)
+	NamedQuery(query string, arg interface{}) (*sqlx.Rows, error)
+	PrepareNamed(query string) (*sqlx.NamedStmt, error)
+	PrepareNamedContext(ctx context.Context, query string) (*sqlx.NamedStmt, error)
+	Preparex(query string) (*sqlx.Stmt, error)
+	PreparexContext(ctx context.Context, query string) (*sqlx.Stmt, error)
+	QueryRowx(query string, args ...interface{}) *sqlx.Row
+	QueryRowxContext(ctx context.Context, query string, args ...interface{}) *sqlx.Row
+	Queryx(query string, args ...interface{}) (*sqlx.Rows, error)
+	QueryxContext(ctx context.Context, query string, args ...interface{}) (*sqlx.Rows, error)
+	Rebind(query string) string
+	Select(dest interface{}, query string, args ...interface{}) error
+	SelectContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error
+}
+
+// 在初始化 connectionPool的时候就将 sqlx.DB 设置为 Unsafe, 这样, 所有由这个对象生成出来的对象都是 unsafe 的.
+
+// 每个业务方法的事务传播策略默认为 TxSupports:
+// 如果 inputHandle 是事务就在事务中执行, 如果 inputHandle 不是事务就用连接池.
+// 使用这种事务传播策略时什么都不必额外做.
+//
+// 还有一种事务传播策略 TxRequired:
+// 如果 inputHandle 是事务就在事务中执行, 如果 inputHandle 不是事务, 那么就创建一个事务.
+// 如果事务是当前方法创建的, 那么离开当前方法时会根据情况决定提交或回滚次事务.
+// TxRequired 的调用和 conditionallyCommitFunc 的调用应该应该在一个函数中成对.
+
+func TxRequired(inputHandle ISqlxDBOrSqlxTx) (outputHandle ISqlxDBOrSqlxTx, conditionallyCommitFunc func(errorWhenLeaveTxScope error) (originalErrorOrCommitError error), err error) {
+	switch inputHandle := inputHandle.(type) {
+	case *sqlx.Tx:
+		noOp := func(errorWhenLeaveTxScope error) (originalError error) { return errorWhenLeaveTxScope }
+		return inputHandle, noOp, nil
+	case *sqlx.DB:
+		sqlxTx, err := inputHandle.Beginx()
+		if err != nil {
+			return nil, nil, err
+		}
+		commitOrRollback := func(errorWhenLeaveTxScope error) (originalErrorOrCommitError error) {
+			if errorWhenLeaveTxScope != nil {
+				_ = sqlxTx.Rollback()
+				return errorWhenLeaveTxScope
+			}
+			commitError := sqlxTx.Commit()
+			return commitError
+		}
+		return sqlxTx, commitOrRollback, nil
+	default:
+		return nil, nil, fmt.Errorf("invalid inputHandle: %v", inputHandle)
+	}
+}
+
+func testTxnPropagation() {
+	sqlDb, cleanup := db_.GetDB()
+	defer cleanup()
+	db := sqlx.NewDb(sqlDb, "postgres")
+	db = db.Unsafe()
+	o := &Outer{&Mid{&Inner{}}}
+
+	err := o.needTx(db)
+	if err != nil {
+		panic(err)
+	}
+}
+
+type Outer struct{ *Mid }
+type Mid struct{ *Inner }
+type Inner struct{}
+
+func (o *Outer) needTx(tx ISqlxDBOrSqlxTx) (err error) {
+	tx, conditionallyCommitFunc, err := TxRequired(tx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err = conditionallyCommitFunc(err)
+	}()
+	err = o.Mid.needTx(tx)
+	if err != nil {
+		return err
+	}
+	report := &Report{}
+	err = tx.Get(report, "SELECT * FROM report_t where report_id in (42)")
+	if err != nil {
+		pp.Println(err)
+	} else {
+		pp.Println("outer needTx:", report)
+	}
+	err = o.Mid.notNeedTx(tx)
+	if err != nil {
+		return err
+	}
+	time.Sleep(time.Minute * 5)
+	return nil
+}
+
+func (m *Mid) needTx(tx ISqlxDBOrSqlxTx) (err error) {
+	tx, conditionallyCommitFunc, err := TxRequired(tx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err = conditionallyCommitFunc(err)
+	}()
+	err = m.Inner.needTx(tx)
+	if err != nil {
+		return err
+	}
+	report := &Report{}
+	err = tx.Get(report, "SELECT * FROM report_t where report_id in (42)")
+	if err != nil {
+		pp.Println(err)
+	} else {
+		pp.Println("mid needTx:", report)
+	}
+	return nil
+}
+
+func (m *Mid) notNeedTx(db ISqlxDBOrSqlxTx) (err error) {
+	report := &Report{}
+	err = db.Get(report, "SELECT * FROM report_t where report_id in (42)")
+	if err != nil {
+		pp.Println(err)
+	} else {
+		pp.Println("mid notNeedTx:", report)
+	}
+	return nil
+}
+
+func (i *Inner) needTx(tx ISqlxDBOrSqlxTx) (err error) {
+	tx, conditionallyCommitFunc, err := TxRequired(tx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err = conditionallyCommitFunc(err)
+	}()
+	report := &Report{}
+	err = tx.Get(report, "update report_t set report_id=42 where report_id in (9) returning *")
+	if err != nil {
+		pp.Println(err)
+	} else {
+		pp.Println("inner needTx update:", report)
+	}
+	if err != nil {
+		return err
+	}
+	report2 := &Report{}
+	err = tx.Get(report2, "SELECT * FROM report_t where report_id in (42)")
+	if err != nil {
+		pp.Println(err)
+	} else {
+		pp.Println("inner needTx get:", report2)
+	}
+	return nil
 }
