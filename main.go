@@ -456,9 +456,9 @@ func (o *Outer) needTx(tx ISqlxDBOrSqlxTx) (err error) {
 	err = tx.Get(report, "SELECT * FROM report_t where report_id in (42)")
 	if err != nil {
 		pp.Println(err)
-	} else {
-		pp.Println("outer needTx:", report)
+		return err
 	}
+	pp.Println("outer needTx:", report)
 	err = o.Mid.notNeedTx(tx)
 	if err != nil {
 		return err
@@ -483,9 +483,9 @@ func (m *Mid) needTx(tx ISqlxDBOrSqlxTx) (err error) {
 	err = tx.Get(report, "SELECT * FROM report_t where report_id in (42)")
 	if err != nil {
 		pp.Println(err)
-	} else {
-		pp.Println("mid needTx:", report)
+		return err
 	}
+	pp.Println("mid needTx:", report)
 	return nil
 }
 
@@ -494,9 +494,9 @@ func (m *Mid) notNeedTx(db ISqlxDBOrSqlxTx) (err error) {
 	err = db.Get(report, "SELECT * FROM report_t where report_id in (42)")
 	if err != nil {
 		pp.Println(err)
-	} else {
-		pp.Println("mid notNeedTx:", report)
+		return err
 	}
+	pp.Println("mid notNeedTx:", report)
 	return nil
 }
 
@@ -512,9 +512,9 @@ func (i *Inner) needTx(tx ISqlxDBOrSqlxTx) (err error) {
 	err = tx.Get(report, "update report_t set report_id=42 where report_id in (9) returning *")
 	if err != nil {
 		pp.Println(err)
-	} else {
-		pp.Println("inner needTx update:", report)
+		return err
 	}
+	pp.Println("inner needTx update:", report)
 	if err != nil {
 		return err
 	}
@@ -522,8 +522,8 @@ func (i *Inner) needTx(tx ISqlxDBOrSqlxTx) (err error) {
 	err = tx.Get(report2, "SELECT * FROM report_t where report_id in (42)")
 	if err != nil {
 		pp.Println(err)
-	} else {
-		pp.Println("inner needTx get:", report2)
+		return err
 	}
+	pp.Println("inner needTx get:", report2)
 	return nil
 }
