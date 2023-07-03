@@ -67,3 +67,23 @@ This saves us labor.
 高级话题:
 
 事务传播: https://www.liaoxuefeng.com/wiki/1252599548343744/1282383642886177
+
+
+Prepared Statement:
+
+```golang
+    // Define a prepared statement. You'd typically define the statement
+    // elsewhere and save it for use in functions such as this one.
+    stmt, err := db.Prepare("SELECT * FROM album WHERE id = ?")
+    if err != nil {
+        log.Fatal(err)
+    }
+```
+
+```text
+Be sure that stmt.Close is called when your code is finished with a statement.
+```
+
+https://go.dev/doc/database/prepared-statements
+
+http://go-database-sql.org/prepared.html
