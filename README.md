@@ -64,9 +64,9 @@ iii. To map between a database row and a program object automatically.
 This saves us labor.
 
 
-高级话题:
+Transaction Propagation:
 
-事务传播: https://www.liaoxuefeng.com/wiki/1252599548343744/1282383642886177
+https://www.liaoxuefeng.com/wiki/1252599548343744/1282383642886177
 
 
 Prepared Statement:
