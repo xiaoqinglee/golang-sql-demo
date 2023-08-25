@@ -92,6 +92,10 @@ func testManuallyScanAndAutoScan() {
 	db := sqlx.NewDb(sqlDb, "postgres")
 
 	rows, err := db.Queryx("SELECT * FROM report_t")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
 	for rows.Next() {
 		oneRowData := make(map[string]interface{})
 		err = rows.MapScan(oneRowData)
@@ -106,6 +110,9 @@ func testManuallyScanAndAutoScan() {
 		} else {
 			pp.Println(oneRowData2)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
 	}
 
 	var reports []*Report
@@ -199,6 +206,9 @@ func testInClauseAndNamedQuery() {
 		"reported_by": 42,
 	}
 	query, args, err = sqlx.Named("SELECT * FROM report_t WHERE reporter=:reported_by", arg)
+	if err != nil {
+		log.Fatal(err)
+	}
 	pp.Println("args", args)
 	pp.Println("query", query)
 	query = db.Rebind(query)
@@ -236,9 +246,15 @@ func testInClauseAndNamedQuery() {
 		"reported_by": 42,
 	}
 	query, args, err = sqlx.Named("SELECT * FROM report_t WHERE reporter=:reported_by AND report_id IN (:ids)", arg)
+	if err != nil {
+		log.Fatal(err)
+	}
 	pp.Println("args", args)
 	pp.Println("query", query)
 	query, args, err = sqlx.In(query, args...)
+	if err != nil {
+		log.Fatal(err)
+	}
 	pp.Println("args", args)
 	pp.Println("query", query)
 	query = db.Rebind(query)
